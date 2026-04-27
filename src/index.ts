@@ -22,7 +22,8 @@ export {
 	CaptureError,
 	FileSystemError,
 } from "./errors.js";
-
+// CLI runner (also useful for embedding the CLI in another tool)
+export { buildInvocation, parseCliArgs, runFromArgs, USAGE } from "./runner.js";
 // Schemas / configuration
 export {
 	CaptureConfig,
@@ -35,16 +36,11 @@ export {
 	VideoQualityPaths,
 	ViewportConfig,
 } from "./schemas.js";
-
 // Service / DI
+// Default export for convenience
 export {
 	CaptureConfigLive,
 	CaptureConfigTag,
 	UICaptureService,
+	UICaptureService as default,
 } from "./service.js";
-
-// CLI runner (also useful for embedding the CLI in another tool)
-export { buildInvocation, parseCliArgs, runFromArgs, USAGE } from "./runner.js";
-
-// Default export for convenience
-export { UICaptureService as default } from "./service.js";
