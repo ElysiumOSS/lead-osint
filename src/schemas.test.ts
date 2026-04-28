@@ -14,8 +14,8 @@ import { describe, expect, it } from "vitest";
 import {
 	CaptureConfig,
 	createCaptureConfig,
-	ViewportConfig,
 	VideoOptions,
+	ViewportConfig,
 } from "./schemas.js";
 
 describe("createCaptureConfig", () => {

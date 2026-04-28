@@ -64,6 +64,16 @@ describe("createHostFilterState", () => {
 		expect(f.hostMatchesFilters("evil.io", true)).toBe(false);
 	});
 
+	it("does not leak across the TLD when includeSubdomains=true", () => {
+		// Regression: previously "evil.com" matched because the suffix list
+		// for "example.com" included the bare TLD "com". Bare-TLD suffixes
+		// are dropped during hydrate, so unrelated same-TLD hosts are rejected.
+		const f = createHostFilterState();
+		f.hydrate("example.com", []);
+		expect(f.hostMatchesFilters("evil.com", true)).toBe(false);
+		expect(f.hostMatchesFilters("example.org", true)).toBe(false);
+	});
+
 	it("honours extra allowed hosts", () => {
 		const f = createHostFilterState();
 		f.hydrate("example.com", ["cdn.partner.io"]);
@@ -112,9 +122,7 @@ describe("getRouteName", () => {
 	});
 
 	it("slugifies multi-segment paths", () => {
-		expect(getRouteName("https://example.com/blog/post-1")).toBe(
-			"blog-post-1",
-		);
+		expect(getRouteName("https://example.com/blog/post-1")).toBe("blog-post-1");
 		expect(getRouteName("https://example.com/en/legal/privacy/")).toBe(
 			"en-legal-privacy",
 		);

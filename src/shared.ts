@@ -168,9 +168,15 @@ export const createHostFilterState = (): HostFilterState => {
 			const configured = extraAllowedHosts.map(canonicalizeHost);
 			const primary = canonicalizeHost(primaryHost);
 			allowedHostnames = new Set([primary, ...configured].filter(Boolean));
+			// Drop bare-TLD suffixes (e.g. "com") so an allow-listed
+			// "example.com" with includeSubdomains=true does not also match
+			// every other ".com" host. A registered domain needs at least
+			// one dot to be a meaningful suffix.
 			hostSuffixes = new Set(
 				Array.from(allowedHostnames).flatMap((host) =>
-					computeHostSuffixes(host),
+					computeHostSuffixes(host).filter((suffix) =>
+						suffix.includes("."),
+					),
 				),
 			);
 		},

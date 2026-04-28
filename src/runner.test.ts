@@ -64,9 +64,7 @@ describe("buildInvocation", () => {
 		const inv = buildInvocation(
 			parseCliArgs(["https://example.com", "--output-dir", "out/screenshots"]),
 		);
-		expect(inv.overrides.outputDir).toBe(
-			path.resolve(cwd, "out/screenshots"),
-		);
+		expect(inv.overrides.outputDir).toBe(path.resolve(cwd, "out/screenshots"));
 	});
 
 	it("parses integer flags into numbers", () => {
