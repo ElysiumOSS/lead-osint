@@ -42,7 +42,8 @@
 		"lint:packages": "bun pm ls",
 		"lint:spelling": "cspell \"**\" \".github/**/*\"",
 		"test": "vitest",
-		"tsc": "tsc"
+		"tsc": "tsc",
+		"test:integration": "RUN_INTEGRATION=1 vitest --run --config vitest.integration.config.ts"
 	},
 	"dependencies": {
 		"@effect/schema": "^0.75.5",

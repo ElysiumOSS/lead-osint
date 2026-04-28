@@ -28,12 +28,17 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
       - name: Publish to GitHub Packages
-        run: |
-          echo "@elysiumoss:registry=https://npm.pkg.github.com" >> ~/.npmrc
-          echo "//npm.pkg.github.com/:_authToken=${{ secrets.GITHUB_TOKEN }}" >> ~/.npmrc
-          npm publish --registry=https://npm.pkg.github.com --access public --no-provenance
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          echo "@elysiumoss:registry=https://npm.pkg.github.com" >> ~/.npmrc
+          echo "//npm.pkg.github.com/:_authToken=${{ secrets.GITHUB_TOKEN }}" >> ~/.npmrc
+          if npm view --registry=https://npm.pkg.github.com "@elysiumoss/ui-capture@$VERSION" version >/dev/null 2>&1; then
+            echo "Version $VERSION already on GitHub Packages — skipping."
+            exit 0
+          fi
+          npm publish --registry=https://npm.pkg.github.com --access public --no-provenance
 
 name: Release
 
