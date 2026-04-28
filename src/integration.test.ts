@@ -10,11 +10,11 @@
  *
  */
 
-import http from "node:http";
 import fs from "node:fs/promises";
+import http from "node:http";
+import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
-import type { AddressInfo } from "node:net";
 import { Effect } from "effect";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { CaptureConfigLive, UICaptureService } from "./service.js";
