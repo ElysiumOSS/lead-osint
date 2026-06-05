@@ -360,13 +360,61 @@ bun run lint    # biome
 bun test        # unit + integration (in-memory sqlite-vec)
 ```
 
-## Ethics & legal
+## ⚖️ Legal disclaimer
 
-Use this only on data you're allowed to process. Ingest from sources you have
-access to, respect each site's terms and rate limits (network steps keep bounded
-concurrency + timeouts), don't store data you shouldn't, and keep outreach
-consensual — sending is deliberately one-at-a-time and opt-in. Secrets live in
-`.env` (git-ignored); none are committed.
+**This software is provided "as is", without warranty of any kind, express or
+implied** (see [License](#license)). It is a tool, **not legal advice**, and the
+authors and contributors accept **no liability** for how it is used.
+
+By using `lead-osint` you acknowledge and agree that:
+
+- **You are the data controller.** You are solely responsible for establishing a
+  lawful basis for processing any personal data (e.g. GDPR Art. 6 — consent or
+  legitimate interest; CCPA/CPRA; and any other laws applicable to you and your
+  data subjects), for honoring data-subject rights, and for your own compliance.
+- **You must respect third-party Terms of Service.** Automated collection from
+  platforms such as LinkedIn, Luma, Partiful, GitHub, or any website may violate
+  their terms and/or local law. This project ships **parsers and API clients for
+  data you already have lawful access to** — it does **not** bypass
+  authentication, paywalls, rate limits, or technical access controls, and you
+  are responsible for how you obtain the inputs you feed it.
+- **Permitted use only.** Do not use this software for stalking, harassment,
+  doxxing, discrimination, surveillance, or any unlawful, deceptive, or harmful
+  purpose. Use it only on data you are authorized to process, for legitimate
+  professional networking and outreach.
+- **Outreach is your responsibility.** Comply with anti-spam and electronic-
+  communications laws (e.g. CAN-SPAM, GDPR/ePrivacy, CASL) for anything you send.
+
+If you are unsure whether a particular use is lawful in your jurisdiction,
+consult a qualified attorney before proceeding.
+
+## 🛡️ Mitigation notice
+
+`lead-osint` is built to reduce risk by default, but **these safeguards do not
+absolve you of the responsibilities above**:
+
+- **Local-first.** All data lives in your single `.db` file. Nothing is uploaded
+  except the explicitly cloud-backed steps (`ocr`, `ingest auto`/`paste`,
+  `assess`, `enrich --exa`/`--github`/`--orgs`, `outreach send`).
+- **Local-only mode.** `LEAD_OSINT_LOCAL_ONLY=1` (or `--local-only`) blocks every
+  command that would transmit a lead's data to a third party unless you pass
+  `--allow-external` for that single run.
+- **Right to erasure.** `forget <id|email|linkedin|name>` deletes a person and
+  all of their associated data (interactions, drafts, reminders, vectors) to help
+  honor GDPR Art. 17 / CCPA deletion requests.
+- **Data minimization at ingest.** Validation rejects non-people, drops generic/
+  self/email-like org strings, and never lets free-email domains define an org.
+- **Outreach is gated.** Drafts are stored and **never auto-sent**; sending is
+  one-at-a-time and requires `--id` plus an explicit `--yes`.
+- **Secrets stay out of git.** Credentials live in `.env` (git-ignored); no keys,
+  databases, or personal data are committed (verified across history).
+- **Polite networking.** Outbound requests use bounded concurrency, timeouts, and
+  an identifying User-Agent.
+
+**Recommended practice:** collect only what you need, set a retention limit and
+delete stale records, secure the `.db` file (it contains personal data — encrypt
+at rest and restrict access), and promptly honor opt-out and data-subject
+requests.
 
 ## License
 
