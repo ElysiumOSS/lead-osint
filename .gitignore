@@ -3,3 +3,16 @@
 /lib
 /node_modules
 .turbo/
+
+# secrets & local state
+.env
+.env.local
+
+# lead-osint runtime data (sqlite store, generated reports, scratch images)
+/data
+*.db
+*.db-journal
+*.db-wal
+/out
+crm.html
+test/personal

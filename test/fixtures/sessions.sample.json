@@ -1,0 +1,51 @@
+[
+	{
+		"friendly_id": "S1",
+		"title": "Scaling LLM Inference Infrastructure",
+		"status": "accepted",
+		"starts_at": "2026-06-10T15:00:00Z",
+		"ends_at": "2026-06-10T16:00:00Z",
+		"description": "<p>How early-stage founders scale <b>LLM</b> inference on a budget.</p>",
+		"speakers": [
+			{
+				"full_name": "Ada Sample",
+				"first_name": "Ada",
+				"last_name": "Sample",
+				"email": "ada@example-hooli.test",
+				"company_name": "Hooli Labs",
+				"title": "Founder & CEO",
+				"phone_mobile": "+1-555-0100",
+				"linkedin_url": "https://linkedin.com/in/ada-sample",
+				"website_url": "https://example-hooli.test"
+			}
+		]
+	},
+	{
+		"friendly_id": "S2",
+		"title": "Design Systems at Scale",
+		"status": "accepted",
+		"starts_at": "2026-06-11T17:00:00Z",
+		"ends_at": "2026-06-11T18:00:00Z",
+		"description": "Building resilient design systems for product teams.",
+		"speakers": [
+			{
+				"full_name": "Grace Sample",
+				"first_name": "Grace",
+				"last_name": "Sample",
+				"email": "grace@example-piedpiper.test",
+				"company_name": "Pied Piper",
+				"title": "VP Engineering",
+				"twitter_url": "https://x.com/grace-sample"
+			}
+		]
+	},
+	{
+		"friendly_id": "S3",
+		"title": "Rejected Talk",
+		"status": "rejected",
+		"starts_at": "2026-06-12T19:00:00Z",
+		"ends_at": "2026-06-12T20:00:00Z",
+		"description": "Should be skipped.",
+		"speakers": [{ "full_name": "Skip Me", "email": "skip@example.test" }]
+	}
+]

@@ -1,46 +1,89 @@
 /**
+ * lead-osint — public library surface.
  *
- * Copyright 2026 Mike Odnis
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- *
+ * Importable building blocks for the pipeline. The CLI (`./cli.ts`) is the
+ * primary entry point; this barrel lets you embed the pieces in your own tools.
  */
 
-// Errors
 export {
-	BrowserError,
-	CaptureError,
-	FileSystemError,
-} from "./errors.js";
-// CLI runner (also useful for embedding the CLI in another tool)
-export { buildInvocation, parseCliArgs, runFromArgs, USAGE } from "./runner.js";
-// Schemas / configuration
+	type Assessment,
+	assessLead,
+	parseAssessment,
+	runAssess,
+} from "./assess.js";
+export { runCli } from "./commands.js";
+export { getConfig, requireGeminiKey, requireSmtp } from "./core/config.js";
+export { type LeadDb, openDatabase } from "./core/db.js";
+export { EMBED_DIM, embed, embedMany } from "./core/embeddings.js";
+export * from "./core/errors.js";
+export { FALLBACK_MODELS, generateText, modelChain } from "./core/gemini.js";
+export { leadId, normalizeName, orgId, slug } from "./core/ids.js";
+export { LeadRepository } from "./core/repository.js";
 export {
-	CaptureConfig,
-	type CaptureConfigOverrides,
-	CaptureReport,
-	CaptureResult,
-	createCaptureConfig,
-	ScreenshotPaths,
-	VideoOptions,
-	VideoQualityPaths,
-	ViewportConfig,
-} from "./schemas.js";
-// Service / DI
-// Default export for convenience
+	type CacheConfig,
+	type CacheStore,
+	MemoryCacheStore,
+	MemoryRateLimitStore,
+	type RateLimitConfig,
+	type RateLimitStore,
+	type ResilienceConfig,
+	type RetryConfig,
+	withResilience,
+} from "./core/resilience.js";
+export type {
+	Edge,
+	EventSource,
+	Lead,
+	OutreachDraft,
+	RawContact,
+	RawEvent,
+	Relation,
+	Stage,
+} from "./core/schema.js";
 export {
-	CaptureConfigLive,
-	CaptureConfigTag,
-	UICaptureService,
-	UICaptureService as default,
-} from "./service.js";
+	cosineSimilarity,
+	deserializeVector,
+	serializeVector,
+	topKCosine,
+} from "./core/vector.js";
+export {
+	applyDedupe,
+	applyOrgDedupe,
+	planDedupe,
+	planOrgDedupe,
+} from "./dedupe.js";
+export {
+	mapEdgar,
+	mapExaResults,
+	mapGithubUser,
+	mapWikidata,
+	mergePatches,
+	runEnrich,
+} from "./enrich.js";
+export { type ExportRow, toCsv, toVcard, writeExport } from "./export.js";
+export { aiExtract, mapExtractResponse } from "./ingest/ai-extract.js";
+export { ingestEventListings } from "./ingest/event-listings.js";
+export { PRIORITY_KEYWORDS, scoreText } from "./ingest/keywords.js";
+export { parseLinkedinConnections } from "./ingest/linkedin.js";
+export { parseLuma } from "./ingest/luma.js";
+export { normalizeInto } from "./ingest/normalize.js";
+export { ingestPartiful } from "./ingest/partiful.js";
+export { parseSessions } from "./ingest/sessions.js";
+export type { IngestResult } from "./ingest/types.js";
+export { ocrImage } from "./ocr/gemini-ocr.js";
+export { ingestImages } from "./ocr/ingest-images.js";
+export { draftForLead, generateDrafts } from "./outreach/draft.js";
+export { sendDraft } from "./outreach/send.js";
+export { findNodes, shortestPath } from "./paths.js";
+export { embedPitch, loadPitch } from "./rank/pitch.js";
+export { rankLeads } from "./rank/relevance.js";
+export { applyRevalidate, planRevalidate } from "./revalidate.js";
+export { explainMatch, hybridSearch, matchedSignals } from "./search.js";
+export { createHandler, serve } from "./server.js";
+export { renderDashboard } from "./view/dashboard.js";
+export { buildDump, renderDumpMarkdown, writeDump } from "./view/dump.js";
+export {
+	buildViewData,
+	renderGraphHtml,
+	writeGraphHtml,
+} from "./view/graph-html.js";

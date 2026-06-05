@@ -1,6 +1,5 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 /**
- *
  * Copyright 2026 Mike Odnis
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -14,9 +13,9 @@
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
- *
  */
 
-import { runFromArgs } from "./runner.js";
+import { runCli } from "./commands.js";
 
-await runFromArgs(process.argv.slice(2));
+const code = await runCli(process.argv.slice(2));
+process.exit(code);
