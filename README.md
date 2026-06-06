@@ -115,6 +115,9 @@ bun run src/cli.ts run --pitch test/fixtures/pitch.md \
 | `ingest linkedin <file.json>` | LinkedIn connections `[{name,bio,linkedin}]`; splits `"Title at Company"` |
 | `ingest auto <file>` | **AI-normalize any JSON/text file** into leads (Gemini) |
 | `ingest paste [--text "…"]` | **Paste anything** — stdin or `--text`; AI extracts leads |
+| `ingest openvc <file.csv>` | **OpenVC** investor CSV export → firms (stage/geo/thesis/cheque) |
+| `ingest airtable <file.csv>` | **Airtable** "Pitch Deck Database" CSV → firms (stage/sectors/partner/portfolio) |
+| `ingest investors auto <file>` | **AI-normalize any blob** into investor firms (Gemini) |
 | `ocr <dir> [--concurrency 4] [--min-confidence 0.45]` | Vision-OCR cards/badges/flyers → leads (Gemini) |
 
 ### Enrich · rank · assess
@@ -126,6 +129,7 @@ bun run src/cli.ts run --pitch test/fixtures/pitch.md \
 | `dedupe [--apply] [--leads\|--orgs]` | Merge duplicate people + org variants (dry-run unless `--apply`) |
 | `revalidate [--apply]` | Clean an existing store: drop fake-email orgs, junk orgs, non-people |
 | `rank --pitch <file>` | Score every lead by pitch-fit (vector + keyword) |
+| `match --profile startup.json [--pitch f] [--top N] [--min-score s] [--require-stage] [--require-geo] [--out f]` | **Rank investor firms** for your startup: stage · sector+thesis · geo · cheque, with per-factor breakdown. Tune with `--stage-weight`/`--sector-weight`/`--geo-weight`/`--check-weight` |
 | `assess --pitch <file> [--web] [--only-new] [--limit N] [--rpm N]` | LLM relevance + relationship + rationale per lead. `--web` researches each; `--only-new` skips assessed; `--rpm` throttles |
 
 ### Explore · CRM · outreach
@@ -138,6 +142,7 @@ bun run src/cli.ts run --pitch test/fixtures/pitch.md \
 | `path "<you>" "<target>"` | Warm-intro path: shortest chain via shared org/event |
 | `next [--stage new] [--limit 15]` | Call-list: who to contact next, by fit + stage |
 | `vcs [--out f]` (alias `firms`) | VC firms in your network + warm contacts (`--all` for every investor firm) |
+| `serve` → **Investors** tab | Ranked investor matches with per-factor bars + warm-intro badges (after `match`) |
 | `stage <id\|name\|email> <stage>` | Move a lead: new→contacted→replied→meeting→passed |
 | `note <id\|name\|email> "text"` | Append a note + log an interaction |
 | `remind <id\|name> <3d\|2026-07-01> ["note"]` | Set a follow-up (`remind done <id>` clears it) |
@@ -145,6 +150,7 @@ bun run src/cli.ts run --pitch test/fixtures/pitch.md \
 | `export [csv\|vcard] [--stage s] [--relationship r] [--min-fit n]` | Export contacts (defaults CSV → `out/leads.csv`) |
 | `dump [--out out/dump] [--format json\|md\|both]` | Full dossier dump of every lead |
 | `outreach draft [--top 10] [--pitch f]` | Generate drafts (stored, **never auto-sent**) |
+| `outreach draft --investors [--top N] [--profile f]` | Draft fundraising emails to top-matched firms (warm-routed when a contact exists) |
 | `outreach list [--status draft]` · `outreach send --id <id> --yes` | List / send one draft over SMTP (gated, opt-in) |
 | `forget <id\|email\|linkedin\|name> [--yes]` | **Erase** a lead + all their data (GDPR/CCPA) |
 | `run …` | End-to-end: ingest → embed → rank → view (+ optional drafts) |
@@ -210,6 +216,61 @@ flowchart LR
 
 ---
 
+## Matching investors to your startup
+
+`rank`/`assess` score *people* against your pitch. **`match` scores investor
+firms** — ingested from OpenVC / Airtable CSV exports — against a structured
+*startup profile*, so you get a ranked shortlist tuned to your **stage** and the
+other factors that actually decide fit.
+
+Describe your startup once in a `startup.json` (see
+[`startup.example.json`](startup.example.json)):
+
+```json
+{
+  "stage": "seed",
+  "sectors": ["fintech", "saas"],
+  "geo": { "hq": "us", "targetMarkets": ["us", "eu"] },
+  "raising": { "checkTarget": 500000 },
+  "pitchPath": "pitch.md"
+}
+```
+
+Then:
+
+```bash
+lead-osint ingest openvc oct-2025-openvc.csv     # or: ingest airtable pitch-deck.csv
+lead-osint embed                                 # embeds investor theses (local MiniLM)
+lead-osint match --profile startup.json --top 20
+```
+
+Each firm gets an explainable score — four factors in [0, 1], blended by tunable
+weights (defaults `0.30 / 0.40 / 0.15 / 0.15`):
+
+```mermaid
+flowchart LR
+  S["startup.json<br/>stage · sectors · geo · cheque"] --> ST & SE & GE & CK
+  P["pitch.md"] --> PV["pitch vector"] --> SE
+  I["investor<br/>stages · sectors · geo · band · thesis"] --> ST & SE & GE & CK
+  ST["stage fit"] -->|"× .30"| F["match score (0–1)"]
+  SE["sector + thesis<br/>jaccard ⊕ cosine"] -->|"× .40"| F
+  GE["geo fit"] -->|"× .15"| F
+  CK["cheque fit"] -->|"× .15"| F
+```
+
+- **stage** — `1` if the investor backs your round, `0.5` one round away, else `0`.
+- **sector + thesis** — `0.6·cosine(pitch, thesis) + 0.4·jaccard(sectors)`.
+- **geo** — `1` on overlap or a global investor; `0` on a confirmed mismatch.
+- **cheque** — `1` if your target cheque sits inside their first-cheque band.
+
+A blank field scores a neutral `0.5` (don't bury an unknown); a *confirmed*
+mismatch scores low.
+`--require-stage` / `--require-geo` turn a factor into a hard filter.
+Results persist, surface in the **Investors** tab of `serve`, and feed
+`outreach draft --investors` (warm-routed when a partner is already in your graph).
+
+---
+
 ## The CRM loop
 
 ```mermaid
@@ -269,11 +330,30 @@ erDiagram
   events { text id PK  text name  text date  real priority_score }
   edges  { text src_id  text dst_id  text rel "works_at|speaks_at|hosts|attended|knows" }
   lead_vec { blob embedding "vec0(float[384])" }
+
+  investors ||--|| investor_vec : "thesis vector"
+  investors {
+    text id PK
+    text name
+    text domain
+    text stages "idea→growth"
+    text sectors
+    text geo
+    real check_min
+    real check_max
+    text partner_email "warm-intro bridge"
+    real match_score "from match"
+    blob embedding "Float32 384-d"
+  }
+  investor_vec { blob embedding "vec0(float[384])" }
 ```
 
 - **edges** drive the graph: `works_at` / `speaks_at` / `hosts` / `attended` / `knows`.
-- **lead_vec** is a `sqlite-vec` `vec0(float[384])` ANN index, with a pure-JS
-  cosine fallback if the extension can't load.
+- **lead_vec** / **investor_vec** are `sqlite-vec` `vec0(float[384])` ANN indexes,
+  each with a pure-JS cosine fallback if the extension can't load.
+- **investors** are a separate entity scored by `match` against your
+  `startup.json`; `partner_email` bridges a firm to a person already in your
+  graph so a match can surface a warm intro.
 - Re-running any ingest is **idempotent** — leads dedupe by email (or name+org)
   and fields merge rather than overwrite.
 

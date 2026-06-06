@@ -5,8 +5,8 @@
  * modules, prints a concise human summary, and closes cleanly. The heavy lifting
  * lives in core/ingest/ocr/rank/outreach/view.
  */
-import { readdir, readFile, stat, writeFile } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
+import { dirname, join, resolve } from "node:path";
 import { runAssess } from "./assess.js";
 import { getConfig } from "./core/config.js";
 import { parseWhen } from "./core/dates.js";
@@ -23,19 +23,38 @@ import {
 import { runEnrich } from "./enrich.js";
 import { buildExportRows, writeExport } from "./export.js";
 import { aiExtract } from "./ingest/ai-extract.js";
+import { parseAirtable } from "./ingest/airtable.js";
 import { ingestEventListings } from "./ingest/event-listings.js";
+import { aiExtractInvestors } from "./ingest/investor-extract.js";
+import {
+	type InvestorNormalizeStats,
+	normalizeInvestorsInto,
+	warmContactForInvestor,
+} from "./ingest/investors.js";
 import { parseLinkedinConnections } from "./ingest/linkedin.js";
 import { parseLuma } from "./ingest/luma.js";
 import { normalizeInto } from "./ingest/normalize.js";
+import { parseOpenVc } from "./ingest/openvc.js";
 import { ingestPartiful } from "./ingest/partiful.js";
 import { parseSessions } from "./ingest/sessions.js";
 import { fromContacts, type IngestResult } from "./ingest/types.js";
 import { ingestImages } from "./ocr/ingest-images.js";
-import { generateDrafts } from "./outreach/draft.js";
+import { draftForInvestor, generateDrafts } from "./outreach/draft.js";
 import { sendDraft } from "./outreach/send.js";
 import { findNodes, shortestPath } from "./paths.js";
-import { loadPitch } from "./rank/pitch.js";
+import {
+	DEFAULT_WEIGHTS,
+	type MatchedInvestor,
+	type MatchWeights,
+	matchInvestors,
+} from "./rank/match.js";
+import { embedPitch, loadPitch } from "./rank/pitch.js";
 import { rankLeads } from "./rank/relevance.js";
+import {
+	loadProfile,
+	profileText,
+	type StartupProfile,
+} from "./rank/startup-profile.js";
 import { applyRevalidate, planRevalidate } from "./revalidate.js";
 import { hybridSearch, matchedSignals } from "./search.js";
 import { serve } from "./server.js";
@@ -58,6 +77,9 @@ const BOOLEAN_FLAGS = [
 	"force",
 	"allow-external",
 	"local-only",
+	"require-stage",
+	"require-geo",
+	"investors",
 ];
 
 /** Parse argv and run the matching command. Returns a process exit code. */
@@ -83,6 +105,9 @@ export async function runCli(argv: string[]): Promise<number> {
 				return 0;
 			case "rank":
 				await cmdRank(args);
+				return 0;
+			case "match":
+				await cmdMatch(args);
 				return 0;
 			case "search":
 				await cmdSearch(args);
@@ -249,10 +274,16 @@ async function cmdIngest(args: ParsedArgs): Promise<void> {
 	const file = args.positional[2];
 	if (!source) {
 		throw new LeadOsintError(
-			"Usage: lead-osint ingest <sessions|partiful|event-listings|luma|linkedin|auto|paste> [file.json]",
+			"Usage: lead-osint ingest <sessions|partiful|event-listings|luma|linkedin|auto|paste|openvc|airtable|investors> [file]",
 		);
 	}
 	const enrich = !args.options["no-enrich"];
+
+	// Investor (firm) sources write to the `investors` table, not `leads`.
+	if (source === "openvc" || source === "airtable" || source === "investors") {
+		await cmdIngestInvestors(args, source, file);
+		return;
+	}
 
 	await withStore(async (_store, repo) => {
 		displayHeader("Ingest", { source, file: file ?? "(stdin)" });
@@ -381,17 +412,25 @@ async function cmdEmbed(args: ParsedArgs): Promise<void> {
 			...(force ? { mode: "force (re-embed all)" } : {}),
 		});
 		const pending = repo.leadsMissingVectors(force);
-		if (pending.length === 0) {
-			console.log("  all leads already embedded. (use --force to re-embed)");
-			return;
+		if (pending.length > 0) {
+			console.log(`  embedding ${pending.length} leads…`);
+			const vectors = await embedMany(pending.map((p) => p.text));
+			pending.forEach((p, i) => {
+				const vec = vectors[i];
+				if (vec) repo.setLeadVector(p.id, vec);
+			});
+			console.log(`  embedded ${pending.length} leads.`);
 		}
-		console.log(`  embedding ${pending.length} leads…`);
-		const vectors = await embedMany(pending.map((p) => p.text));
-		pending.forEach((p, i) => {
-			const vec = vectors[i];
-			if (vec) repo.setLeadVector(p.id, vec);
-		});
-		console.log(`  embedded ${pending.length} leads.`);
+
+		// Investors share the same embedding model (thesis text → 384-d vector).
+		const investors = await embedPendingInvestors(repo, force);
+		if (investors > 0) console.log(`  embedded ${investors} investor theses.`);
+
+		if (pending.length === 0 && investors === 0) {
+			console.log(
+				"  all leads + investors already embedded. (use --force to re-embed)",
+			);
+		}
 	});
 }
 
@@ -414,6 +453,233 @@ async function cmdRank(args: ParsedArgs): Promise<void> {
 			);
 		}
 	});
+}
+
+/** Ingest investor firms from OpenVC/Airtable CSV, or AI-extract any blob. */
+async function cmdIngestInvestors(
+	args: ParsedArgs,
+	source: string,
+	file: string | undefined,
+): Promise<void> {
+	await withStore(async (_store, repo) => {
+		displayHeader("Ingest investors", { source, file: file ?? "(stdin)" });
+		let records: Awaited<ReturnType<typeof aiExtractInvestors>>;
+		switch (source) {
+			case "openvc":
+				records = parseOpenVc(
+					await readFile(requireFile(file, source), "utf-8"),
+				);
+				break;
+			case "airtable":
+				records = parseAirtable(
+					await readFile(requireFile(file, source), "utf-8"),
+				);
+				break;
+			case "investors": {
+				// `ingest investors auto <file>` — AI-normalize an arbitrary blob.
+				const sub = file; // positional[2]
+				const aiFile = args.positional[3];
+				if (sub !== "auto") {
+					throw new LeadOsintError(
+						"Usage: lead-osint ingest investors auto <file>",
+					);
+				}
+				assertExternalAllowed(
+					args,
+					"ingest investors auto (sends data to Gemini)",
+				);
+				records = await aiExtractInvestors(
+					await readFile(requireFile(aiFile, "investors auto"), "utf-8"),
+					{ source: "ai", sourceRef: aiFile },
+				);
+				break;
+			}
+			default:
+				throw new LeadOsintError(`Unknown investor source: ${source}`);
+		}
+		const stats = normalizeInvestorsInto(repo, records);
+		reportInvestorIngest(stats, repo);
+		console.log(
+			"  next: `lead-osint embed` then `lead-osint match --profile startup.json`",
+		);
+	});
+}
+
+function reportInvestorIngest(
+	stats: InvestorNormalizeStats,
+	repo: LeadRepository,
+): void {
+	console.log(
+		`  + ${stats.investors} investors` +
+			(stats.skipped ? `  (skipped ${stats.skipped} nameless)` : ""),
+	);
+	const totals = repo.counts();
+	console.log(`  store now: ${totals.investors} investors`);
+}
+
+/** Embed investors that lack a thesis vector. Returns how many were embedded. */
+async function embedPendingInvestors(
+	repo: LeadRepository,
+	force = false,
+): Promise<number> {
+	const pending = repo.investorsMissingVectors(force);
+	if (pending.length === 0) return 0;
+	const vectors = await embedMany(pending.map((p) => p.text));
+	pending.forEach((p, i) => {
+		const vec = vectors[i];
+		if (vec) repo.setInvestorVector(p.id, vec);
+	});
+	return pending.length;
+}
+
+/** Parse the tunable match weights from flags, falling back to defaults. */
+function matchWeights(args: ParsedArgs): MatchWeights {
+	return {
+		stage: num(args, "stage-weight") ?? DEFAULT_WEIGHTS.stage,
+		sector: num(args, "sector-weight") ?? DEFAULT_WEIGHTS.sector,
+		geo: num(args, "geo-weight") ?? DEFAULT_WEIGHTS.geo,
+		check: num(args, "check-weight") ?? DEFAULT_WEIGHTS.check,
+	};
+}
+
+/**
+ * Resolve the pitch text used for semantic thesis matching: an explicit --pitch
+ * file wins, then the profile's own `pitchPath`, else the structured profile
+ * flattened to text. Always returns something embeddable.
+ */
+async function resolvePitchText(
+	args: ParsedArgs,
+	profile: StartupProfile,
+): Promise<string> {
+	const pitchPath = str(args, "pitch") ?? profile.pitchPath ?? undefined;
+	if (pitchPath) {
+		try {
+			return await loadPitch(pitchPath);
+		} catch (error) {
+			// A missing/unreadable pitch shouldn't sink a match — the structured
+			// profile still carries stage/sector/geo/cheque + a thesis description.
+			console.warn(
+				`  ⚠ could not read pitch "${pitchPath}" (${errorMessage(error)}); using profile text instead.`,
+			);
+		}
+	}
+	return profileText(profile);
+}
+
+async function cmdMatch(args: ParsedArgs): Promise<void> {
+	const profilePath = str(args, "profile");
+	if (!profilePath) {
+		throw new LeadOsintError(
+			"Usage: lead-osint match --profile startup.json [--pitch f] [--top N] [--min-score s] [--require-stage] [--require-geo]",
+		);
+	}
+	const top = num(args, "top") ?? 20;
+	const minScore = num(args, "min-score");
+	const out = str(args, "out");
+
+	await withStore(async (_store, repo) => {
+		const profile = await loadProfile(profilePath);
+		displayHeader("Match investors", {
+			profile: profilePath,
+			stage: profile.stage,
+			sectors: profile.sectors.join(", ") || "(any)",
+		});
+		if (repo.counts().investors === 0) {
+			console.log(
+				"  no investors yet — run `lead-osint ingest openvc <file.csv>` first.",
+			);
+			return;
+		}
+		// Make sure every investor has a thesis vector before scoring.
+		const embedded = await embedPendingInvestors(repo);
+		if (embedded) console.log(`  embedded ${embedded} investor theses…`);
+
+		const pitchText = await resolvePitchText(args, profile);
+		const pitchVector = await embedPitch(pitchText);
+		let matches = matchInvestors(repo, profile, pitchVector, {
+			weights: matchWeights(args),
+			requireStage: !!args.options["require-stage"],
+			requireGeo: !!args.options["require-geo"],
+		});
+		if (minScore != null) matches = matches.filter((m) => m.score >= minScore);
+
+		console.log(`  scored ${matches.length} investors. Top matches:\n`);
+		for (const m of matches.slice(0, top)) {
+			printInvestorMatch(repo, m);
+		}
+		if (out) await writeInvestorCsv(repo, matches, out);
+	});
+}
+
+/** Print one ranked investor with its per-factor breakdown + warm contact. */
+function printInvestorMatch(repo: LeadRepository, m: MatchedInvestor): void {
+	const inv = m.investor;
+	const b = m.breakdown;
+	const warm = warmContactForInvestor(repo, inv);
+	const bits = [
+		inv.stages.length ? inv.stages.join("/") : null,
+		inv.sectors.slice(0, 3).join(", ") || null,
+		inv.checkMin != null || inv.checkMax != null
+			? `$${fmtCheck(inv.checkMin)}–${fmtCheck(inv.checkMax)}`
+			: null,
+	]
+		.filter(Boolean)
+		.join(" · ");
+	console.log(
+		`  ${m.score.toFixed(2)}  ${inv.name}${inv.domain ? ` (${inv.domain})` : ""}`,
+	);
+	console.log(
+		`        stage ${b.stage.toFixed(2)} · sector ${b.sector.toFixed(2)} · geo ${b.geo.toFixed(2)} · check ${b.check.toFixed(2)}${bits ? `   [${bits}]` : ""}`,
+	);
+	if (inv.partnerEmail || inv.partnerName) {
+		const w = warm ? `  ⟵ WARM via ${warm.fullName}` : "";
+		console.log(
+			`        ${inv.partnerName ?? ""}${inv.partnerEmail ? ` <${inv.partnerEmail}>` : ""}${w}`,
+		);
+	}
+}
+
+function fmtCheck(n: number | null): string {
+	if (n == null) return "?";
+	if (n >= 1e6) return `${n / 1e6}M`;
+	if (n >= 1e3) return `${n / 1e3}k`;
+	return String(n);
+}
+
+/** Write ranked investor matches to a CSV (score + per-factor breakdown). */
+async function writeInvestorCsv(
+	_repo: LeadRepository,
+	matches: MatchedInvestor[],
+	out: string,
+): Promise<void> {
+	const cell = (s: string) =>
+		/[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+	const header =
+		"Score,Investor,Domain,Stages,Sectors,Geo,CheckMin,CheckMax,Stage,Sector,GeoFit,Check,Partner,PartnerEmail";
+	const lines = matches.map((m) => {
+		const i = m.investor;
+		const b = m.breakdown;
+		return [
+			m.score.toFixed(4),
+			cell(i.name),
+			cell(i.domain ?? ""),
+			cell(i.stages.join("/")),
+			cell(i.sectors.join("; ")),
+			cell(i.geo.join("; ")),
+			i.checkMin ?? "",
+			i.checkMax ?? "",
+			b.stage,
+			b.sector,
+			b.geo,
+			b.check,
+			cell(i.partnerName ?? ""),
+			cell(i.partnerEmail ?? ""),
+		].join(",");
+	});
+	const path = resolve(out);
+	await mkdir(dirname(path), { recursive: true });
+	await writeFile(path, [header, ...lines].join("\r\n"), "utf-8");
+	console.log(`\n  wrote ${matches.length} investors → ${path}`);
 }
 
 async function cmdSearch(args: ParsedArgs): Promise<void> {
@@ -466,6 +732,7 @@ async function cmdOutreach(args: ParsedArgs): Promise<void> {
 }
 
 async function outreachDraft(args: ParsedArgs): Promise<void> {
+	if (args.options.investors) return outreachDraftInvestors(args);
 	assertExternalAllowed(args, "outreach draft (sends lead context to Gemini)");
 	const top = num(args, "top") ?? 10;
 	const pitchPath = str(args, "pitch");
@@ -492,6 +759,69 @@ async function outreachDraft(args: ParsedArgs): Promise<void> {
 		);
 		console.log(
 			"  then send one with `lead-osint outreach send --id <id> --yes`.",
+		);
+	});
+}
+
+/**
+ * Draft fundraising outreach to the top-matched investor firms. Drafts print to
+ * the console; when a warm contact (a person already in your CRM) is found, the
+ * draft is also stored under that lead so it shows up in `outreach list`.
+ */
+async function outreachDraftInvestors(args: ParsedArgs): Promise<void> {
+	assertExternalAllowed(
+		args,
+		"outreach draft --investors (sends investor context to Gemini)",
+	);
+	const top = num(args, "top") ?? 10;
+	const pitchPath = str(args, "pitch");
+	const profilePath = str(args, "profile");
+	await withStore(async (_store, repo) => {
+		displayHeader("Draft investor outreach", {
+			top: String(top),
+			model: getConfig().geminiTextModel,
+		});
+		const investors = repo
+			.listInvestors()
+			.filter((i) => i.matchScore != null)
+			.slice(0, top);
+		if (investors.length === 0) {
+			console.log(
+				"  no scored investors — run `lead-osint match --profile startup.json` first.",
+			);
+			return;
+		}
+		const profile = profilePath ? await loadProfile(profilePath) : null;
+		const pitch = pitchPath
+			? await loadPitch(pitchPath)
+			: profile
+				? profileText(profile)
+				: undefined;
+		const sender = {
+			name: str(args, "name") ?? getConfig().smtp?.fromName ?? "Me",
+			linkedin: str(args, "linkedin"),
+		};
+		for (const inv of investors) {
+			const warm = warmContactForInvestor(repo, inv);
+			const draft = await draftForInvestor(inv, {
+				pitch,
+				sender,
+				warmContact: warm ? { name: warm.fullName } : null,
+			});
+			console.log(`\n  ✎ ${inv.name}: ${draft.subject}`);
+			if (warm) {
+				// Persist under the warm lead so it appears in `outreach list`.
+				const id = repo.addDraft(warm.id, "email", draft.subject, draft.body);
+				repo.addInteraction(
+					warm.id,
+					"draft",
+					`Investor intro to ${inv.name}: ${draft.subject}`,
+				);
+				console.log(`     stored as draft #${id} (warm via ${warm.fullName})`);
+			}
+		}
+		console.log(
+			"\n  warm drafts are stored; cold drafts are printed above (no lead row to attach).",
 		);
 	});
 }
@@ -559,6 +889,9 @@ async function cmdRun(args: ParsedArgs): Promise<void> {
 		const luma = str(args, "luma");
 		const linkedin = str(args, "linkedin");
 		const images = str(args, "images");
+		const openvc = str(args, "openvc");
+		const airtable = str(args, "airtable");
+		const profilePath = str(args, "profile");
 		const enrich = !args.options["no-enrich"];
 
 		if (sessions) {
@@ -600,6 +933,26 @@ async function cmdRun(args: ParsedArgs): Promise<void> {
 				repo,
 			);
 		}
+		if (openvc) {
+			console.log(`[ingest] openvc: ${openvc}`);
+			reportInvestorIngest(
+				normalizeInvestorsInto(
+					repo,
+					parseOpenVc(await readFile(openvc, "utf-8")),
+				),
+				repo,
+			);
+		}
+		if (airtable) {
+			console.log(`[ingest] airtable: ${airtable}`);
+			reportInvestorIngest(
+				normalizeInvestorsInto(
+					repo,
+					parseAirtable(await readFile(airtable, "utf-8")),
+				),
+				repo,
+			);
+		}
 
 		const pending = repo.leadsMissingVectors();
 		if (pending.length) {
@@ -610,6 +963,8 @@ async function cmdRun(args: ParsedArgs): Promise<void> {
 				if (v) repo.setLeadVector(p.id, v);
 			});
 		}
+		const pendingInvestors = await embedPendingInvestors(repo);
+		if (pendingInvestors) console.log(`[embed] ${pendingInvestors} investors`);
 
 		if (pitchPath) {
 			console.log(`[rank] pitch: ${pitchPath}`);
@@ -629,6 +984,20 @@ async function cmdRun(args: ParsedArgs): Promise<void> {
 					onProgress: (lead, d) =>
 						console.log(`  ✎ ${lead.fullName}: ${d.subject}`),
 				});
+			}
+		}
+
+		if (profilePath && repo.counts().investors > 0) {
+			console.log(`[match] profile: ${profilePath}`);
+			const profile = await loadProfile(profilePath);
+			const pitchVector = await embedPitch(
+				await resolvePitchText(args, profile),
+			);
+			const matches = matchInvestors(repo, profile, pitchVector);
+			for (const m of matches.slice(0, 10)) {
+				console.log(
+					`   ${m.score.toFixed(2)}  ${m.investor.name}${m.investor.stages.length ? ` [${m.investor.stages.join("/")}]` : ""}`,
+				);
 			}
 		}
 
@@ -1176,6 +1545,9 @@ COMMANDS
   ingest linkedin <file.json>       Import LinkedIn connections ([{name,bio,linkedin}]); splits "Title at Company"
   ingest auto <file>                AI-normalize ANY JSON/text file into leads (Gemini)
   ingest paste [--text "…"]         AI-normalize pasted text / stdin into leads (Gemini)
+  ingest openvc <file.csv>          Import an OpenVC investor CSV export (firms)
+  ingest airtable <file.csv>        Import an Airtable "Pitch Deck Database" CSV export (firms)
+  ingest investors auto <file>      AI-normalize ANY blob into investor firms (Gemini)
   ocr <images-dir> [--concurrency 4] [--min-confidence 0.45]   Extract contacts from images (Gemini)
   embed [--force]                   Embed leads that lack a vector (local MiniLM); --force re-embeds all
   enrich [--github] [--exa] [--orgs] [--all]   Fill gaps from public OSINT sources
@@ -1183,6 +1555,8 @@ COMMANDS
   revalidate [--apply]              Clean an existing store: drop fake-email orgs, junk orgs, non-people
   forget <id|email|linkedin|name> [--yes]   Erase a lead + all their data (GDPR/CCPA deletion)
   rank --pitch <file>               Score every lead by fit to your pitch (vector + keyword)
+  match --profile startup.json [--pitch f] [--top N] [--min-score s] [--require-stage] [--require-geo] [--out f]
+                                    Rank investor firms for your startup (stage · sector+thesis · geo · check); --*-weight to tune
   assess --pitch <file> [--web] [--only-new] [--limit N] [--rpm N]   AI relevance + relationship + why per lead (Gemini; --web researches each; --only-new skips already-assessed; --rpm throttles)
   search "<query>" [--k 20]         Hybrid (semantic + keyword) search, with match reasons
   path "<you>" "<target>"           Warm-intro path: how you're connected (shared org/event)
@@ -1196,11 +1570,11 @@ COMMANDS
   vcs [--out f]                     Live list of VC firms in your network + warm contacts (alias: firms)
   remind <id|name> <3d|2026-07-01> ["note"]   Set a follow-up (remind done <id> to clear)
   due [--all]                       Follow-ups due now/overdue (--all = everything open)
-  outreach draft [--top 10] [--pitch f]   Generate drafts (stored, not sent)
+  outreach draft [--top 10] [--pitch f] [--investors] [--profile f]   Generate drafts (stored, not sent); --investors drafts to matched firms
   outreach list [--status draft]    List stored drafts
   outreach send --id <id> --yes     Send one draft over SMTP (gated)
-  run --pitch <file> [--sessions f] [--partiful f] [--event-listings f] [--luma f] [--linkedin f] [--images dir] [--top N] [--out f]
-                                    End-to-end: ingest → embed → rank → view (+ drafts)
+  run --pitch <file> [--sessions f] [--partiful f] [--event-listings f] [--luma f] [--linkedin f] [--images dir] [--openvc f] [--airtable f] [--profile startup.json] [--top N] [--out f]
+                                    End-to-end: ingest → embed → rank → match → view (+ drafts)
   stats                             Show store counts
   help                              This message
 

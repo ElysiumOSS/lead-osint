@@ -9,11 +9,13 @@
 import type { Database } from "bun:sqlite";
 import type { LeadDb } from "./db.js";
 import { DbError } from "./errors.js";
-import { eventId, leadId, linkedinKey, orgId } from "./ids.js";
+import { eventId, investorId, leadId, linkedinKey, orgId } from "./ids.js";
 import type {
 	Edge,
 	EventSource,
 	Interaction,
+	Investor,
+	InvestorStage,
 	Lead,
 	NodeType,
 	OutreachDraft,
@@ -58,6 +60,56 @@ export interface UpsertEventInput {
 	description?: string | null;
 	priorityScore?: number | null;
 	priorityMatches?: string[];
+}
+
+export interface UpsertInvestorInput {
+	id: string;
+	name: string;
+	domain?: string | null;
+	website?: string | null;
+	hq?: string | null;
+	stages?: InvestorStage[];
+	sectors?: string[];
+	geo?: string[];
+	checkMin?: number | null;
+	checkMax?: number | null;
+	investorType?: string | null;
+	thesis?: string | null;
+	partnerName?: string | null;
+	partnerEmail?: string | null;
+	twitter?: string | null;
+	linkedin?: string | null;
+	portfolio?: string[];
+	source: string;
+	sourceRef?: string | null;
+	notes?: string | null;
+}
+
+interface InvestorRow {
+	id: string;
+	name: string;
+	domain: string | null;
+	website: string | null;
+	hq: string | null;
+	stages: string;
+	sectors: string;
+	geo: string;
+	check_min: number | null;
+	check_max: number | null;
+	investor_type: string | null;
+	thesis: string | null;
+	partner_name: string | null;
+	partner_email: string | null;
+	twitter: string | null;
+	linkedin: string | null;
+	portfolio: string;
+	source: string;
+	source_ref: string | null;
+	match_score: number | null;
+	match_breakdown: string | null;
+	notes: string | null;
+	created_at: string;
+	updated_at: string;
 }
 
 export interface GraphNode {
@@ -1126,6 +1178,247 @@ export class LeadRepository {
 		);
 	}
 
+	// --- investors (the VC-matcher entity) ---------------------------------
+
+	/**
+	 * Idempotent, field-merging upsert of an investor firm. Array fields (stages/
+	 * sectors/geo/portfolio) are unioned with what's already on file; scalars
+	 * coalesce (existing non-null wins over an incoming null). Preserves the
+	 * embedding, match score/breakdown, and created_at across re-ingests.
+	 */
+	upsertInvestor(input: UpsertInvestorInput): Investor {
+		const existing = this.getInvestorRow(input.id);
+		const now = NOW();
+		const mergeArr = (next: string[] | undefined, prev: string): string[] =>
+			unionStrings(prev ? safeJsonArray(prev) : [], next ?? []);
+
+		const row: InvestorRow = {
+			id: input.id,
+			name: input.name || existing?.name || "Unknown",
+			domain: coalesce(input.domain, existing?.domain ?? null),
+			website: coalesce(input.website, existing?.website ?? null),
+			hq: coalesce(input.hq, existing?.hq ?? null),
+			stages: JSON.stringify(mergeArr(input.stages, existing?.stages ?? "")),
+			sectors: JSON.stringify(mergeArr(input.sectors, existing?.sectors ?? "")),
+			geo: JSON.stringify(mergeArr(input.geo, existing?.geo ?? "")),
+			check_min: coalesce(input.checkMin, existing?.check_min ?? null),
+			check_max: coalesce(input.checkMax, existing?.check_max ?? null),
+			investor_type: coalesce(
+				input.investorType,
+				existing?.investor_type ?? null,
+			),
+			thesis: coalesce(input.thesis, existing?.thesis ?? null),
+			partner_name: coalesce(input.partnerName, existing?.partner_name ?? null),
+			partner_email: coalesce(
+				input.partnerEmail,
+				existing?.partner_email ?? null,
+			),
+			twitter: coalesce(input.twitter, existing?.twitter ?? null),
+			linkedin: coalesce(input.linkedin, existing?.linkedin ?? null),
+			portfolio: JSON.stringify(
+				mergeArr(input.portfolio, existing?.portfolio ?? ""),
+			),
+			source: existing?.source ?? input.source,
+			source_ref: coalesce(input.sourceRef, existing?.source_ref ?? null),
+			match_score: existing?.match_score ?? null,
+			match_breakdown: existing?.match_breakdown ?? null,
+			notes: coalesce(input.notes, existing?.notes ?? null),
+			created_at: existing?.created_at ?? now,
+			updated_at: now,
+		};
+
+		// If the thesis text changed, drop the stale vector so `embed` re-embeds.
+		const thesisChanged = !!existing && existing.thesis !== row.thesis;
+
+		this.db
+			.query(
+				`INSERT INTO investors
+					(id, name, domain, website, hq, stages, sectors, geo, check_min,
+					 check_max, investor_type, thesis, partner_name, partner_email,
+					 twitter, linkedin, portfolio, source, source_ref, notes,
+					 created_at, updated_at)
+				 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+				 ON CONFLICT(id) DO UPDATE SET
+					name=excluded.name, domain=excluded.domain, website=excluded.website,
+					hq=excluded.hq, stages=excluded.stages, sectors=excluded.sectors,
+					geo=excluded.geo, check_min=excluded.check_min, check_max=excluded.check_max,
+					investor_type=excluded.investor_type, thesis=excluded.thesis,
+					partner_name=excluded.partner_name, partner_email=excluded.partner_email,
+					twitter=excluded.twitter, linkedin=excluded.linkedin,
+					portfolio=excluded.portfolio, source_ref=excluded.source_ref,
+					notes=excluded.notes, updated_at=excluded.updated_at`,
+			)
+			.run(
+				row.id,
+				row.name,
+				row.domain,
+				row.website,
+				row.hq,
+				row.stages,
+				row.sectors,
+				row.geo,
+				row.check_min,
+				row.check_max,
+				row.investor_type,
+				row.thesis,
+				row.partner_name,
+				row.partner_email,
+				row.twitter,
+				row.linkedin,
+				row.portfolio,
+				row.source,
+				row.source_ref,
+				row.notes,
+				row.created_at,
+				row.updated_at,
+			);
+
+		if (thesisChanged) {
+			this.db
+				.query("UPDATE investors SET embedding = NULL WHERE id = ?")
+				.run(row.id);
+			if (this.hasVec) {
+				const r = this.db
+					.query("SELECT rowid FROM investors WHERE id = ?")
+					.get(row.id) as { rowid: number } | undefined;
+				if (r)
+					this.db
+						.query("DELETE FROM investor_vec WHERE rowid = ?")
+						.run(r.rowid);
+			}
+		}
+
+		return rowToInvestor(row);
+	}
+
+	getInvestor(id: string): Investor | null {
+		const row = this.getInvestorRow(id);
+		return row ? rowToInvestor(row) : null;
+	}
+
+	private getInvestorRow(id: string): InvestorRow | null {
+		return (
+			(this.db
+				.query("SELECT * FROM investors WHERE id = ?")
+				.get(id) as InvestorRow) ?? null
+		);
+	}
+
+	/** All investors, best match first (ranked by `match`), then by name. */
+	listInvestors(opts: { limit?: number } = {}): Investor[] {
+		const limit = opts.limit
+			? `LIMIT ${Math.max(1, Math.floor(opts.limit))}`
+			: "";
+		const rows = this.db
+			.query(
+				`SELECT * FROM investors ORDER BY match_score DESC NULLS LAST, name ${limit}`,
+			)
+			.all() as InvestorRow[];
+		return rows.map(rowToInvestor);
+	}
+
+	/** Resolve an investor by exact id, else a unique name/domain substring. */
+	findInvestors(ref: string): Investor[] {
+		const exact = this.getInvestor(ref);
+		if (exact) return [exact];
+		const like = `%${ref.trim().toLowerCase()}%`;
+		const rows = this.db
+			.query(
+				`SELECT * FROM investors
+				 WHERE lower(name) LIKE ? OR lower(coalesce(domain,'')) LIKE ? OR id = ?
+				 ORDER BY match_score DESC NULLS LAST LIMIT 25`,
+			)
+			.all(like, like, ref) as InvestorRow[];
+		return rows.map(rowToInvestor);
+	}
+
+	/** Persist an investor's thesis embedding to the BLOB column + vec index. */
+	setInvestorVector(id: string, vector: Float32Array): void {
+		const blob = serializeVector(vector);
+		this.db
+			.query("UPDATE investors SET embedding = ? WHERE id = ?")
+			.run(blob, id);
+		if (!this.hasVec) return;
+		const r = this.db
+			.query("SELECT rowid FROM investors WHERE id = ?")
+			.get(id) as { rowid: number } | undefined;
+		if (!r) return;
+		this.db.query("DELETE FROM investor_vec WHERE rowid = ?").run(r.rowid);
+		this.db
+			.query("INSERT INTO investor_vec(rowid, embedding) VALUES (?, ?)")
+			.run(r.rowid, blob);
+	}
+
+	/** Investor ids + embeddable thesis text for those still needing a vector. */
+	investorsMissingVectors(force = false): { id: string; text: string }[] {
+		const rows = this.db
+			.query(
+				`SELECT id, name, hq, sectors, thesis, investor_type FROM investors
+				 ${force ? "" : "WHERE embedding IS NULL"}`,
+			)
+			.all() as Array<{
+			id: string;
+			name: string;
+			hq: string | null;
+			sectors: string;
+			thesis: string | null;
+			investor_type: string | null;
+		}>;
+		return rows.map((r) => ({
+			id: r.id,
+			text: investorEmbedText({
+				name: r.name,
+				hq: r.hq,
+				sectors: safeJsonArray(r.sectors),
+				thesis: r.thesis,
+				investorType: r.investor_type,
+			}),
+		}));
+	}
+
+	/** Cosine score of `query` against every investor that has a thesis vector. */
+	scoreAllInvestorsByVector(query: Float32Array): Map<string, number> {
+		const out = new Map<string, number>();
+		const rows = this.db
+			.query("SELECT id, embedding FROM investors WHERE embedding IS NOT NULL")
+			.all() as { id: string; embedding: Uint8Array | null }[];
+		for (const r of rows) {
+			const vec = deserializeVector(r.embedding ?? null);
+			if (vec) out.set(r.id, cosineSimilarity(query, vec));
+		}
+		return out;
+	}
+
+	/** Store a computed match score + per-factor breakdown for an investor. */
+	setInvestorMatch(
+		id: string,
+		score: number,
+		breakdown: Record<string, number>,
+	): void {
+		this.db
+			.query(
+				"UPDATE investors SET match_score = ?, match_breakdown = ?, updated_at = ? WHERE id = ?",
+			)
+			.run(score, JSON.stringify(breakdown), NOW(), id);
+	}
+
+	/** Delete an investor and its vector. */
+	deleteInvestor(id: string): boolean {
+		if (!this.getInvestor(id)) return false;
+		const tx = this.db.transaction(() => {
+			if (this.hasVec) {
+				const r = this.db
+					.query("SELECT rowid FROM investors WHERE id=?")
+					.get(id) as { rowid: number } | undefined;
+				if (r)
+					this.db.query("DELETE FROM investor_vec WHERE rowid=?").run(r.rowid);
+			}
+			this.db.query("DELETE FROM investors WHERE id=?").run(id);
+		});
+		tx();
+		return true;
+	}
+
 	private vecShortlist(query: Float32Array, k: number): string[] {
 		// sqlite-vec KNN requires a literal/`k = ?` constraint, and the JOIN form
 		// drops it — so match on the vec table directly, then resolve rowids.
@@ -1450,6 +1743,10 @@ export class LeadRepository {
 				"SELECT COUNT(*) AS c FROM leads WHERE relevance IS NOT NULL",
 			),
 			drafts: one("SELECT COUNT(*) AS c FROM outreach"),
+			investors: one("SELECT COUNT(*) AS c FROM investors"),
+			investorsMatched: one(
+				"SELECT COUNT(*) AS c FROM investors WHERE match_score IS NOT NULL",
+			),
 		};
 	}
 }
@@ -1469,6 +1766,63 @@ export function leadEmbedText(row: {
 	return [row.full_name, row.title, row.org_name, row.events, row.notes]
 		.filter(Boolean)
 		.join(". ");
+}
+
+/** Build the text used to embed an investor's thesis (focus + sectors + geo). */
+export function investorEmbedText(inv: {
+	name: string;
+	hq?: string | null;
+	sectors?: string[];
+	thesis?: string | null;
+	investorType?: string | null;
+}): string {
+	return [
+		inv.name,
+		inv.investorType,
+		inv.sectors?.length ? inv.sectors.join(", ") : null,
+		inv.hq,
+		inv.thesis,
+	]
+		.filter(Boolean)
+		.join(". ");
+}
+
+function rowToInvestor(r: InvestorRow): Investor {
+	let breakdown: Record<string, number> | null = null;
+	if (r.match_breakdown) {
+		try {
+			const parsed = JSON.parse(r.match_breakdown);
+			if (parsed && typeof parsed === "object") breakdown = parsed;
+		} catch {
+			breakdown = null;
+		}
+	}
+	return {
+		id: r.id,
+		name: r.name,
+		domain: r.domain,
+		website: r.website,
+		hq: r.hq,
+		stages: safeJsonArray(r.stages) as InvestorStage[],
+		sectors: safeJsonArray(r.sectors),
+		geo: safeJsonArray(r.geo),
+		checkMin: r.check_min,
+		checkMax: r.check_max,
+		investorType: r.investor_type,
+		thesis: r.thesis,
+		partnerName: r.partner_name,
+		partnerEmail: r.partner_email,
+		twitter: r.twitter,
+		linkedin: r.linkedin,
+		portfolio: safeJsonArray(r.portfolio),
+		source: r.source,
+		sourceRef: r.source_ref,
+		matchScore: r.match_score,
+		matchBreakdown: breakdown,
+		notes: r.notes,
+		createdAt: r.created_at,
+		updatedAt: r.updated_at,
+	};
 }
 
 function rowToLead(r: LeadRow): Lead {
@@ -1511,6 +1865,20 @@ function safeJsonArray(text: string): string[] {
 	} catch {
 		return [];
 	}
+}
+
+/** Union two string arrays, trimming + de-duplicating, preserving order. */
+function unionStrings(a: string[], b: string[]): string[] {
+	const seen = new Set<string>();
+	const out: string[] = [];
+	for (const s of [...a, ...b]) {
+		const t = typeof s === "string" ? s.trim() : "";
+		if (t && !seen.has(t)) {
+			seen.add(t);
+			out.push(t);
+		}
+	}
+	return out;
 }
 
 function unionPhones(a: string[], b: string[]): string[] {

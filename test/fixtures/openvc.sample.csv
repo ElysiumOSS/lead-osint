@@ -1,0 +1,6 @@
+Investor name,Website,Global HQ,Countries of investment,Stage of investment,Investment thesis,Investor type,First cheque min,First cheque maximum
+Acme Seed Partners,https://acme.vc,"San Francisco, USA","USA,Canada","1. Idea or Patent,2. Prototype,3. Early Revenue","We invest in pre-seed and seed fintech and SaaS founders.
+
+We love technical teams shipping fast.",VC,"$100,000","$1,000,000"
+Globe Growth Fund,https://globegrowth.example,"London, UK","UK,Germany,France","4. Scaling,5. Growth","We back growth-stage climate and energy companies worldwide.",VC,"$2,000,000","$10,000,000"
+Tiny Angel,,Remote,USA,1. Idea or Patent,"Solo angel writing first cheques into AI tooling.",Solo angel,"$5,000","$25,000"

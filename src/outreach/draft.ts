@@ -9,7 +9,7 @@ import { getConfig, requireGeminiKey } from "../core/config.js";
 import { errorMessage, OutreachError } from "../core/errors.js";
 import { generateText, modelChain } from "../core/gemini.js";
 import type { LeadRepository } from "../core/repository.js";
-import type { Lead } from "../core/schema.js";
+import type { Investor, Lead } from "../core/schema.js";
 
 export interface SenderInfo {
 	name: string;
@@ -108,7 +108,97 @@ export async function generateDrafts(
 	return summaries;
 }
 
+export interface DraftInvestorOptions extends DraftOptions {
+	/** A person in your network who can warm-intro you to this firm. */
+	warmContact?: { name: string } | null;
+}
+
+/**
+ * Draft a fundraising outreach email to an investor firm, keyed on its thesis +
+ * the partner contact, and routed through a warm intro when one exists. No
+ * persistence — the caller decides whether to store/send it.
+ */
+export async function draftForInvestor(
+	investor: Investor,
+	options: DraftInvestorOptions = {},
+): Promise<DraftContent> {
+	const config = getConfig();
+	const apiKey = options.apiKey ?? requireGeminiKey(config);
+	const model = options.model ?? config.geminiTextModel;
+	const sender = options.sender ?? { name: config.smtp?.fromName ?? "Me" };
+	const firstName = investor.partnerName?.trim().split(/\s+/)[0] || "there";
+
+	const prompt = buildInvestorPrompt(investor, firstName, sender, options);
+
+	let text: string;
+	try {
+		text = await generateText({
+			apiKey,
+			models: modelChain(model),
+			contents: [{ role: "user", parts: [{ text: prompt }] }],
+			config: { responseMimeType: "application/json", temperature: 0.7 },
+		});
+	} catch (error) {
+		throw new OutreachError(
+			`Gemini investor-draft request failed: ${errorMessage(error)}`,
+			error,
+		);
+	}
+
+	const parsed = parseDraft(text);
+	if (!parsed)
+		throw new OutreachError("Could not parse draft JSON from model response");
+	return parsed;
+}
+
 // --- internals -------------------------------------------------------------
+
+function buildInvestorPrompt(
+	investor: Investor,
+	firstName: string,
+	sender: SenderInfo,
+	options: DraftInvestorOptions,
+): string {
+	const tone =
+		options.tone ??
+		"Confident, concise, and specific — a founder who respects the investor's time";
+	const cta =
+		options.callToAction ??
+		"a brief intro call to see if there's a fit for your current round";
+	const warm = options.warmContact?.name
+		? `You share a mutual connection: ${options.warmContact.name}. Open by naturally mentioning this warm connection.`
+		: "This is a cold outreach — earn attention in the first line; do not fabricate a mutual connection.";
+
+	return `Write a short, high-signal fundraising outreach email to a venture investor.
+
+INVESTOR:
+- Firm: ${investor.name}
+- Partner (greet this person): ${firstName}
+- Stages they back: ${investor.stages.join(", ") || "(unknown)"}
+- Sectors / focus: ${investor.sectors.join(", ") || "(unknown)"}
+- Thesis: ${investor.thesis ?? "(unknown)"}
+
+WARM INTRO:
+${warm}
+
+WHAT THE SENDER IS BUILDING (their startup pitch):
+${options.pitch ?? "(no pitch provided — keep it crisp and concrete)"}
+
+SENDER:
+- Name: ${sender.name}
+- LinkedIn: ${sender.linkedin ?? ""}
+
+REQUIREMENTS:
+- Start with "Hi ${firstName},"
+- Tone: ${tone}
+- In 1 sentence, connect what the sender is building to THIS firm's thesis/stage/sectors — be specific, not generic flattery.
+- State the raise stage and traction crisply if present in the pitch.
+- Call to action: ${cta}.
+- 90-160 words. Do NOT include a signature or sign-off name.
+- Do not confuse sender and investor.
+
+Return ONLY JSON: {"subject":"...","body":"..."}`;
+}
 
 function buildPrompt(
 	lead: Lead,

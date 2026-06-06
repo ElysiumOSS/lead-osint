@@ -35,6 +35,24 @@ export type Relation = (typeof RELATIONS)[number];
 export const NODE_TYPES = ["lead", "org", "event"] as const;
 export type NodeType = (typeof NODE_TYPES)[number];
 
+/**
+ * Canonical funding stages an investor backs (and a startup is at). Ordered
+ * earliest → latest so adjacency (a half-credit in stage scoring) is just an
+ * index distance of 1. Source strings ("1. Idea or Patent", "Pre-Seed", …) are
+ * mapped onto this enum by `normalizeStages` in ingest/investor-normalize.
+ */
+export const INVESTOR_STAGES = [
+	"idea",
+	"pre-seed",
+	"seed",
+	"series-a",
+	"series-b",
+	"series-c",
+	"growth",
+] as const;
+export const InvestorStageSchema = z.enum(INVESTOR_STAGES);
+export type InvestorStage = (typeof INVESTOR_STAGES)[number];
+
 /** How a lead could matter to your business (set by `assess`). */
 export const RELATIONSHIPS = [
 	"investor",
@@ -174,3 +192,69 @@ export const OutreachDraftSchema = z.object({
 	createdAt: z.string(),
 });
 export type OutreachDraft = z.infer<typeof OutreachDraftSchema>;
+
+// ---------------------------------------------------------------------------
+// Investors (firms) — the VC-matcher entity
+// ---------------------------------------------------------------------------
+
+/**
+ * Raw investor record every investor source (OpenVC, Airtable, AI auto-extract)
+ * produces. Stages/sectors/geo are already canonicalized arrays by the time they
+ * reach `normalizeInvestorsInto`. Cheque sizes are USD numbers (or null).
+ */
+export const RawInvestorSchema = z.object({
+	name: z.string().min(1),
+	website: z.string().nullish(),
+	domain: z.string().nullish(),
+	hq: z.string().nullish(),
+	/** Canonical funding stages this investor backs. */
+	stages: z.array(InvestorStageSchema).default([]),
+	/** Lowercased sector tokens (fintech, saas, climate, …). */
+	sectors: z.array(z.string()).default([]),
+	/** Lowercased geography tokens (us, eu, india, global, …). */
+	geo: z.array(z.string()).default([]),
+	checkMin: z.number().nullish(),
+	checkMax: z.number().nullish(),
+	investorType: z.string().nullish(),
+	thesis: z.string().nullish(),
+	partnerName: z.string().nullish(),
+	partnerEmail: z.string().nullish(),
+	twitter: z.string().nullish(),
+	linkedin: z.string().nullish(),
+	portfolio: z.array(z.string()).default([]),
+	/** Provenance: which ingest produced this (openvc|airtable|ai|…). */
+	source: z.string().min(1),
+	sourceRef: z.string().nullish(),
+});
+export type RawInvestor = z.infer<typeof RawInvestorSchema>;
+
+/** A stored investor firm (as returned by the repository). */
+export const InvestorSchema = z.object({
+	id: z.string(),
+	name: z.string(),
+	domain: z.string().nullable(),
+	website: z.string().nullable(),
+	hq: z.string().nullable(),
+	stages: z.array(InvestorStageSchema),
+	sectors: z.array(z.string()),
+	geo: z.array(z.string()),
+	checkMin: z.number().nullable(),
+	checkMax: z.number().nullable(),
+	investorType: z.string().nullable(),
+	thesis: z.string().nullable(),
+	partnerName: z.string().nullable(),
+	partnerEmail: z.string().nullable(),
+	twitter: z.string().nullable(),
+	linkedin: z.string().nullable(),
+	portfolio: z.array(z.string()),
+	source: z.string(),
+	sourceRef: z.string().nullable(),
+	/** Latest multi-factor match score (0–1) vs the startup profile, set by `match`. */
+	matchScore: z.number().nullable(),
+	/** Per-factor breakdown JSON for explainability, set by `match`. */
+	matchBreakdown: z.record(z.string(), z.number()).nullable(),
+	notes: z.string().nullable(),
+	createdAt: z.string(),
+	updatedAt: z.string(),
+});
+export type Investor = z.infer<typeof InvestorSchema>;

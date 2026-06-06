@@ -1,0 +1,4 @@
+Investor Name,Fund Type,Fund Stage,Website,Fund Focus (Sectors),Partner Name,Partner Email,Portfolio Companies,Location,Twitter Link,LinkedIn Link
+Northwind Ventures,Venture Fund,"Seed,Series A",https://northwind.example,"FinTech,SaaS,Big Data & Analytics",Dana Lee,dana@northwind.example,"Stripe,Plaid","San Francisco, USA",https://twitter.com/northwind,https://linkedin.com/company/northwind
+Solo Sam,Angel Investor,Pre-Seed,,"AI,Developer Tools",Sam Carter,sam@example.com,"Acme Robotics","New York, USA",,https://linkedin.com/in/samcarter
+Cannabis Cap,Venture Fund,"Series B,Series C",https://cannacap.example,"Cannabis,Healthcare",,,"GreenCo","Toronto, Canada",,

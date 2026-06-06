@@ -11,6 +11,7 @@ import { errorMessage } from "./core/errors.js";
 import type { LeadRepository } from "./core/repository.js";
 import { STAGES, type Stage } from "./core/schema.js";
 import { buildExportRows, toCsv, toVcard } from "./export.js";
+import { warmContactForInvestor } from "./ingest/investors.js";
 import { draftForLead } from "./outreach/draft.js";
 import { findNodes, shortestPath } from "./paths.js";
 import { hybridSearch } from "./search.js";
@@ -248,6 +249,36 @@ export function createHandler(
 				return compressed(
 					req,
 					JSON.stringify({ firms: all ? firms : firms.filter((f) => f.isVc) }),
+					"application/json",
+				);
+			}
+
+			// Ranked investor matches (from the last `match` run) + the warm-intro
+			// contact resolved against your people graph, for the Investors tab.
+			if (method === "GET" && path === "/api/investors") {
+				const investors = repo.listInvestors().map((inv) => {
+					const warm = warmContactForInvestor(repo, inv);
+					return {
+						id: inv.id,
+						name: inv.name,
+						domain: inv.domain,
+						website: inv.website,
+						stages: inv.stages,
+						sectors: inv.sectors,
+						geo: inv.geo,
+						checkMin: inv.checkMin,
+						checkMax: inv.checkMax,
+						investorType: inv.investorType,
+						partnerName: inv.partnerName,
+						partnerEmail: inv.partnerEmail,
+						matchScore: inv.matchScore,
+						matchBreakdown: inv.matchBreakdown,
+						warm: warm ? { id: warm.id, name: warm.fullName } : null,
+					};
+				});
+				return compressed(
+					req,
+					JSON.stringify({ investors }),
 					"application/json",
 				);
 			}

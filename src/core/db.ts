@@ -14,7 +14,7 @@ import { getConfig } from "./config.js";
 import { EMBED_DIM } from "./embeddings.js";
 import { DbError, errorMessage } from "./errors.js";
 
-const SCHEMA_VERSION = "3";
+const SCHEMA_VERSION = "4";
 
 export interface LeadDb {
 	db: Database;
@@ -80,6 +80,34 @@ function migrate(db: Database, hasVec: boolean): void {
 				name TEXT NOT NULL,
 				domain TEXT,
 				notes TEXT
+			);
+
+			CREATE TABLE IF NOT EXISTS investors (
+				id TEXT PRIMARY KEY,
+				name TEXT NOT NULL,
+				domain TEXT,
+				website TEXT,
+				hq TEXT,
+				stages TEXT NOT NULL DEFAULT '[]',
+				sectors TEXT NOT NULL DEFAULT '[]',
+				geo TEXT NOT NULL DEFAULT '[]',
+				check_min REAL,
+				check_max REAL,
+				investor_type TEXT,
+				thesis TEXT,
+				partner_name TEXT,
+				partner_email TEXT,
+				twitter TEXT,
+				linkedin TEXT,
+				portfolio TEXT NOT NULL DEFAULT '[]',
+				source TEXT NOT NULL,
+				source_ref TEXT,
+				embedding BLOB,
+				match_score REAL,
+				match_breakdown TEXT,
+				notes TEXT,
+				created_at TEXT NOT NULL,
+				updated_at TEXT NOT NULL
 			);
 
 			CREATE TABLE IF NOT EXISTS leads (
@@ -166,6 +194,8 @@ function migrate(db: Database, hasVec: boolean): void {
 			CREATE INDEX IF NOT EXISTS idx_edges_src ON edges(src_type, src_id);
 			CREATE INDEX IF NOT EXISTS idx_outreach_lead ON outreach(lead_id);
 			CREATE INDEX IF NOT EXISTS idx_reminders_due ON reminders(done, due_at);
+			CREATE INDEX IF NOT EXISTS idx_investors_domain ON investors(domain);
+			CREATE INDEX IF NOT EXISTS idx_investors_match ON investors(match_score);
 		`);
 
 		// Add columns introduced after a store was first created (idempotent).
@@ -192,6 +222,9 @@ function migrate(db: Database, hasVec: boolean): void {
 		if (hasVec) {
 			db.exec(
 				`CREATE VIRTUAL TABLE IF NOT EXISTS lead_vec USING vec0(embedding float[${EMBED_DIM}]);`,
+			);
+			db.exec(
+				`CREATE VIRTUAL TABLE IF NOT EXISTS investor_vec USING vec0(embedding float[${EMBED_DIM}]);`,
 			);
 		}
 

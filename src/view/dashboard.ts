@@ -26,7 +26,7 @@ export function renderDashboard(): string {
 <header class="topbar">
 	<div class="brand"><span class="dot"></span> lead-osint <span class="muted">live CRM</span></div>
 	<div class="stats" id="stats"></div>
-	<div class="seg" id="seg"><button data-view="graph" class="on">Graph</button><button data-view="clusters">Clusters</button><button data-view="vcs">VCs</button><button data-view="board">Board</button></div>
+	<div class="seg" id="seg"><button data-view="graph" class="on">Graph</button><button data-view="clusters">Clusters</button><button data-view="vcs">VCs</button><button data-view="investors">Investors</button><button data-view="board">Board</button></div>
 	<button id="duebtn" class="duebtn" type="button">Due <span id="duecount">0</span></button>
 </header>
 <main class="layout" id="graphview">
@@ -52,6 +52,7 @@ export function renderDashboard(): string {
 <section class="board" id="board" hidden></section>
 <section class="clusters" id="clusters" hidden></section>
 <section class="clusters" id="vcs" hidden></section>
+<section class="clusters" id="investors" hidden></section>
 <div class="drawer" id="drawer" hidden></div>
 <div class="duepanel" id="duepanel" hidden></div>
 <script>${SCRIPT}</script>
@@ -161,6 +162,9 @@ async function load(){
 	renderStats({people:DATA.leads.length,assessed:DATA.leads.filter(l=>l.relevance!=null).length,orgs:DATA.nodes.filter(n=>n.type==="org").length,links:DATA.edges.length});
 	$("duecount").textContent=DATA.due||0;
 	buildGraph(); renderRows();
+	// VC-matcher case: a store with investors but no people would open on an empty
+	// graph (people-only). Jump straight to the Investors tab so it's not blank.
+	if(!DATA.leads.length){const b=document.querySelector('[data-view="investors"]');if(b)b.click();}
 }
 // Poll lightweight counts so the "assessed" tally climbs live during a background
 // assess run (the full graph isn't refetched — just the stats bar + due badge).
@@ -359,7 +363,33 @@ $("seg").addEventListener("click",e=>{const v=e.target.dataset.view;if(!v)return
 	$("board").classList.toggle("on",boardOn);
 	$("clusters").classList.toggle("on",v==="clusters");
 	$("vcs").classList.toggle("on",v==="vcs");
-	if(boardOn)renderBoard();else if(v==="clusters")renderClusters();else if(v==="vcs")renderVcs();else render();});
+	$("investors").classList.toggle("on",v==="investors");
+	if(boardOn)renderBoard();else if(v==="clusters")renderClusters();else if(v==="vcs")renderVcs();else if(v==="investors")renderInvestors();else render();});
+let investorsLoaded=false;
+function fmtCheck(n){if(n==null)return "?";if(n>=1e6)return (n/1e6)+"M";if(n>=1e3)return (n/1e3)+"k";return ""+n;}
+const FACTOR_COLORS={stage:"#e9c46a",sector:"#5ec6a8",geo:"#9b8cff",check:"#4cc9f0"};
+async function renderInvestors(){
+	if(!investorsLoaded){$("investors").innerHTML="<div class='empty'>loading investor matches…</div>";
+		try{const r=await api("/api/investors");window.__investors=r.investors||[];investorsLoaded=true;}catch(e){$("investors").innerHTML="<div class='empty'>could not load investors</div>";return;}}
+	const inv=window.__investors||[];
+	if(!inv.length){$("investors").innerHTML="<div class='empty'>No investors yet — run <code>lead-osint ingest openvc &lt;file.csv&gt;</code> then <code>lead-osint match --profile startup.json</code>.</div>";return;}
+	const scored=inv.filter(i=>i.matchScore!=null);
+	if(!scored.length){$("investors").innerHTML="<div class='empty'>"+inv.length+" investors ingested but unscored — run <code>lead-osint match --profile startup.json</code>.</div>";return;}
+	$("investors").innerHTML=scored.map(i=>{
+		const b=i.matchBreakdown||{};
+		const bar=["stage","sector","geo","check"].map(k=>"<span style='width:"+(25*(b[k]||0)*4/4)+"%;background:"+FACTOR_COLORS[k]+"' title='"+k+" "+((b[k]||0).toFixed(2))+"'></span>").join("");
+		const meta=[i.stages&&i.stages.length?i.stages.join("/"):null,(i.sectors||[]).slice(0,3).join(", ")||null,
+			(i.checkMin!=null||i.checkMax!=null)?"$"+fmtCheck(i.checkMin)+"–"+fmtCheck(i.checkMax):null].filter(Boolean).join(" · ");
+		const warm=i.warm?"<div class='mem' data-id='"+esc(i.warm.id)+"'><span class='f' style='color:#5ec6a8'>warm</span><span class='nm'>via "+esc(i.warm.name)+"</span></div>":"";
+		const partner=(i.partnerName||i.partnerEmail)?"<div class='meta'>"+esc(i.partnerName||"")+(i.partnerEmail?" &lt;"+esc(i.partnerEmail)+"&gt;":"")+"</div>":"";
+		const site=i.website?"<a href='"+esc(i.website)+"' target=_blank onclick='event.stopPropagation()'>site</a>":(i.domain?"<a href='https://"+esc(i.domain)+"' target=_blank onclick='event.stopPropagation()'>site</a>":"");
+		return "<div class='cl'><h3>"+(i.matchScore.toFixed(2))+" · "+esc(i.name)+" "+site+"</h3>"+
+			"<div class='meta'>"+esc(meta||"—")+"</div><div class='relbar'>"+bar+"</div>"+
+			"<div class='meta'>stage "+(b.stage||0).toFixed(2)+" · sector "+(b.sector||0).toFixed(2)+" · geo "+(b.geo||0).toFixed(2)+" · check "+(b.check||0).toFixed(2)+"</div>"+
+			partner+warm+"</div>";
+	}).join("");
+	for(const m of $("investors").querySelectorAll(".mem"))m.onclick=()=>openLead(m.dataset.id);
+}
 let vcsLoaded=false;
 async function renderVcs(){
 	if(!vcsLoaded){$("vcs").innerHTML="<div class='empty'>loading VC firms…</div>";

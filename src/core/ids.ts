@@ -34,6 +34,17 @@ export function orgId(nameOrDomain: string): string {
 	return s || hashId(cleaned);
 }
 
+/**
+ * Investor (firm) id: prefer the domain (most stable natural key across the
+ * OpenVC/Airtable sources), else a slug of the firm name. Prefixed `inv_` so it
+ * never collides with an org id derived from the same string.
+ */
+export function investorId(name: string, domain?: string | null): string {
+	const key = (domain || name).trim();
+	const s = slug(key);
+	return `inv_${s || hashId(key)}`;
+}
+
 const NAME_NOISE =
 	/\b(jr|sr|ii|iii|iv|v|phd|ph\.d|md|m\.d|mba|esq|dr|mr|mrs|ms|prof|professor|hon)\b/g;
 

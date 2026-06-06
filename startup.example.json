@@ -1,0 +1,17 @@
+{
+  "name": "Acme Robotics",
+  "stage": "seed",
+  "sectors": ["robotics", "ai", "logistics", "supply chain"],
+  "geo": {
+    "hq": "us",
+    "targetMarkets": ["us", "eu"]
+  },
+  "raising": {
+    "amount": 3000000,
+    "checkTarget": 500000
+  },
+  "businessModel": "B2B SaaS + hardware for autonomous warehouse logistics",
+  "traction": "$40k MRR, 3 paying enterprise pilots, 2.1x QoQ growth",
+  "description": "We build autonomous mobile robots and an orchestration platform that lets mid-market warehouses automate picking without ripping out existing racking. Deep-tech edge perception, founded by ex-Amazon Robotics engineers.",
+  "pitchPath": "pitch.md"
+}
